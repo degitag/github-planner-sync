@@ -247,15 +247,26 @@ def update_planner_task(task_id, title=None, percent_complete=None):
         "Authorization": f"Bearer {get_graph_token()}",
         "Content-Type": "application/json",
     }
+
     data = {}
     if title:
         data["title"] = title
     if percent_complete is not None:
         data["percentComplete"] = percent_complete
+
+    if not data:
+        return False
+
+    get_response = requests.get(f"{GRAPH_API}/planner/tasks/{task_id}", headers=headers)
+    if get_response.status_code == 200:
+        etag = get_response.json().get("@odata.etag")
+        if etag:
+            headers["If-Match"] = etag
+
     response = requests.patch(
         f"{GRAPH_API}/planner/tasks/{task_id}", headers=headers, json=data
     )
-    return response.status_code == 200
+    return response.status_code in [200, 204]
 
 
 def update_planner_task_details(task_id, description=None):
