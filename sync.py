@@ -28,6 +28,23 @@ def normalize_value(value):
     return value if value else ""
 
 
+def get_percent_complete_from_labels(labels):
+    label_map = {
+        "backlog": 0,
+        "ideas": 0,
+        "todo": 20,
+        "ready": 30,
+        "in progress": 50,
+        "in review": 75,
+        "done": 100,
+    }
+    label_names = [label.get("name", "").lower() for label in labels]
+    for label_name, percent in label_map.items():
+        if label_name in label_names:
+            return percent
+    return 0
+
+
 GRAPH_API = "https://graph.microsoft.com/v1.0"
 
 
@@ -192,7 +209,7 @@ def create_planner_task(title):
     return None
 
 
-def update_planner_task(task_id, title=None):
+def update_planner_task(task_id, title=None, percent_complete=None):
     headers = {
         "Authorization": f"Bearer {GRAPH_TOKEN}",
         "Content-Type": "application/json",
@@ -200,6 +217,8 @@ def update_planner_task(task_id, title=None):
     data = {}
     if title:
         data["title"] = title
+    if percent_complete is not None:
+        data["percentComplete"] = percent_complete
     response = requests.patch(
         f"{GRAPH_API}/planner/tasks/{task_id}", headers=headers, json=data
     )
@@ -246,13 +265,16 @@ def sync_github_to_planner():
             else f"**GitHub URL:** {issue_url}"
         )
 
+        percent_complete = get_percent_complete_from_labels(issue.get("labels", []))
+
         if not planner_id:
             task = create_planner_task(issue["title"])
             if task:
+                update_planner_task(task["id"], percent_complete=percent_complete)
                 update_planner_task_details(task["id"], description)
                 save_mapping(github_id, task["id"])
                 print(
-                    f"Created Planner task {task['id']} for GitHub issue #{issue['number']}"
+                    f"Created Planner task {task['id']} for GitHub issue #{issue['number']} ({percent_complete}%)"
                 )
         else:
             task = get_planner_task(planner_id)
@@ -260,14 +282,15 @@ def sync_github_to_planner():
                 title_changed = normalize_value(task.get("title")) != normalize_value(
                     issue["title"]
                 )
+                percent_changed = task.get("percentComplete", 0) != percent_complete
                 description_changed = True
 
-                if title_changed or description_changed:
-                    update_planner_task(planner_id, issue["title"])
+                if title_changed or percent_changed or description_changed:
+                    update_planner_task(planner_id, issue["title"], percent_complete)
                     update_planner_task_details(planner_id, description)
                     update_sync_time(github_id=github_id, source="github")
                     print(
-                        f"Updated Planner task {planner_id} for GitHub issue #{issue['number']}"
+                        f"Updated Planner task {planner_id} for GitHub issue #{issue['number']} ({percent_complete}%)"
                     )
 
 
