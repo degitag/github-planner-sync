@@ -158,13 +158,28 @@ def get_all_github_issues():
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
     }
-    response = requests.get(
-        f"{GITHUB_API}/repos/{GITHUB_REPO}/issues?state=all", headers=headers
-    )
-    if response.status_code == 200:
-        return response.json()
-    print(f"GitHub API error: {response.status_code}")
-    return []
+    issues = []
+    url = f"{GITHUB_API}/repos/{GITHUB_REPO}/issues?state=all"
+
+    while url:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            issues.extend(response.json())
+            if "Link" in response.headers and 'rel="next"' in response.headers["Link"]:
+                link_header = response.headers["Link"]
+                next_link = None
+                for link in link_header.split(","):
+                    if 'rel="next"' in link:
+                        next_link = link.split(";")[0].strip().strip("<>")
+                        break
+                url = next_link
+            else:
+                url = None
+        else:
+            print(f"GitHub API error: {response.status_code}")
+            return []
+
+    return issues
 
 
 def create_github_issue(title, body, labels=None):
