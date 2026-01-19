@@ -179,14 +179,12 @@ def get_planner_task(task_id):
     return None
 
 
-def create_planner_task(title, description=None):
+def create_planner_task(title):
     headers = {
         "Authorization": f"Bearer {GRAPH_TOKEN}",
         "Content-Type": "application/json",
     }
     data = {"planId": PLAN_ID, "bucketId": BUCKET_ID, "title": title}
-    if description:
-        data["description"] = description
     response = requests.post(f"{GRAPH_API}/planner/tasks", headers=headers, json=data)
     if response.status_code == 201:
         return response.json()
@@ -194,7 +192,7 @@ def create_planner_task(title, description=None):
     return None
 
 
-def update_planner_task(task_id, title=None, description=None):
+def update_planner_task(task_id, title=None):
     headers = {
         "Authorization": f"Bearer {GRAPH_TOKEN}",
         "Content-Type": "application/json",
@@ -202,12 +200,34 @@ def update_planner_task(task_id, title=None, description=None):
     data = {}
     if title:
         data["title"] = title
-    if description:
-        data["description"] = description
     response = requests.patch(
         f"{GRAPH_API}/planner/tasks/{task_id}", headers=headers, json=data
     )
     return response.status_code == 200
+
+
+def update_planner_task_details(task_id, description=None):
+    headers = {
+        "Authorization": f"Bearer {GRAPH_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    data = {}
+    if description:
+        data["description"] = description
+
+    get_response = requests.get(
+        f"{GRAPH_API}/planner/tasks/{task_id}/details", headers=headers
+    )
+    if get_response.status_code == 200:
+        etag = get_response.json().get("@odata.etag")
+        if etag:
+            headers["If-Match"] = etag
+
+    response = requests.patch(
+        f"{GRAPH_API}/planner/tasks/{task_id}/details", headers=headers, json=data
+    )
+    return response.status_code in [200, 204]
 
 
 def sync_github_to_planner():
@@ -227,8 +247,9 @@ def sync_github_to_planner():
         )
 
         if not planner_id:
-            task = create_planner_task(issue["title"], description)
+            task = create_planner_task(issue["title"])
             if task:
+                update_planner_task_details(task["id"], description)
                 save_mapping(github_id, task["id"])
                 print(
                     f"Created Planner task {task['id']} for GitHub issue #{issue['number']}"
@@ -236,12 +257,14 @@ def sync_github_to_planner():
         else:
             task = get_planner_task(planner_id)
             if task:
-                if normalize_value(task.get("title")) != normalize_value(
+                title_changed = normalize_value(task.get("title")) != normalize_value(
                     issue["title"]
-                ) or normalize_value(task.get("description")) != normalize_value(
-                    description
-                ):
-                    update_planner_task(planner_id, issue["title"], description)
+                )
+                description_changed = True
+
+                if title_changed or description_changed:
+                    update_planner_task(planner_id, issue["title"])
+                    update_planner_task_details(planner_id, description)
                     update_sync_time(github_id=github_id, source="github")
                     print(
                         f"Updated Planner task {planner_id} for GitHub issue #{issue['number']}"
