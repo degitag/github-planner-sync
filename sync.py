@@ -3,6 +3,7 @@ import os
 import sqlite3
 import time
 import json
+import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
@@ -346,6 +347,12 @@ def sync_planner_to_github():
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Sync GitHub Issues with Microsoft Planner tasks"
+    )
+    parser.add_argument("--oneshot", action="store_true", help="Run once and exit")
+    args = parser.parse_args()
+
     init_db()
     print("Starting sync service...")
     print(f"Polling interval: {POLL_INTERVAL} seconds")
@@ -359,6 +366,10 @@ def main():
             print("Sync cycle completed")
         except Exception as e:
             print(f"Error during sync: {e}")
+
+        if args.oneshot:
+            print("\nOneshot mode - exiting after one sync cycle")
+            break
 
         print(f"Next sync in {POLL_INTERVAL} seconds...\n")
         time.sleep(POLL_INTERVAL)
