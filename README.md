@@ -19,13 +19,16 @@ Bidirectional synchronization between GitHub Issues and Microsoft Planner tasks.
    - Check `repo` scope
    - Copy the token
 
-   **Microsoft Graph Bearer Token:**
-   - Open your browser's DevTools (F12)
-   - Go to **Network** tab
-   - Filter for `graph.microsoft.com`
-   - Navigate to your Planner in Teams/browser
-   - Click any request → Headers → Look for `Authorization: Bearer eyJ0...`
-   - Copy everything after `Bearer `
+    **Microsoft Graph Client Credentials:**
+    - Go to https://portal.azure.com → App registrations
+    - Click **New registration**
+    - Enter a name, choose **Accounts in this organizational directory only**
+    - After registration, copy the **Application (client) ID**
+    - Go to **Certificates & secrets** → New client secret → copy the value
+    - Copy the **Directory (tenant) ID** from the Overview
+    - Go to **API permissions** → Add permission → Microsoft Graph → Application permissions
+    - Search for and add `Tasks.ReadWrite.All`
+    - Click **Grant admin consent for [your organization]**
 
 3. **Configure environment variables:**
 
@@ -33,10 +36,12 @@ Bidirectional synchronization between GitHub Issues and Microsoft Planner tasks.
    cp .env.example .env
    ```
 
-   Edit `.env` and fill in:
-   - `GITHUB_TOKEN` - Your GitHub PAT
-   - `GRAPH_TOKEN` - Your Microsoft Graph bearer token
-   - `PLAN_ID` and `BUCKET_ID` are already set
+    Edit `.env` and fill in:
+    - `GITHUB_TOKEN` - Your GitHub PAT
+    - `GRAPH_CLIENT_ID` - Your Azure AD Application (client) ID
+    - `GRAPH_CLIENT_SECRET` - Your Azure AD client secret value
+    - `GRAPH_TENANT_ID` - Your Azure AD Directory (tenant) ID
+    - `PLAN_ID` and `BUCKET_ID` are already set
 
 ## Running
 
@@ -62,8 +67,8 @@ To stop the service, press `Ctrl+C`. To exit the virtual environment, run:
 deactivate
 ```
 
-## Note on Tokens
+## Note on Authentication
 
 - GitHub PATs don't expire but you can rotate them
-- Microsoft Graph bearer tokens expire (~1 hour)
-- If Graph API returns 401, refresh your token from browser and update `.env`
+- Microsoft Graph tokens are automatically refreshed using MSAL (no manual refresh needed)
+- If you get 403 errors, verify that the Azure AD app has `Tasks.ReadWrite.All` permission and admin consent

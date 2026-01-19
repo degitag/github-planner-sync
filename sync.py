@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
+import msal
 
 load_dotenv()
 
@@ -14,7 +15,6 @@ sqlite3.register_converter("TIMESTAMP", lambda d: datetime.fromisoformat(d.decod
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
-GRAPH_TOKEN = os.getenv("GRAPH_TOKEN")
 PLAN_ID = os.getenv("PLAN_ID")
 BUCKET_ID = os.getenv("BUCKET_ID")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_MINUTES", "15")) * 60
@@ -22,6 +22,25 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_MINUTES", "15")) * 60
 DB_FILE = "sync_mappings.db"
 
 GITHUB_API = "https://api.github.com"
+
+
+def get_graph_token():
+    config = {
+        "authority": f"https://login.microsoftonline.com/{os.getenv('GRAPH_TENANT_ID')}",
+        "client_id": os.getenv("GRAPH_CLIENT_ID"),
+        "client_secret": os.getenv("GRAPH_CLIENT_SECRET"),
+        "scope": ["https://graph.microsoft.com/.default"],
+    }
+    app = msal.ConfidentialClientApplication(
+        config["client_id"],
+        authority=config["authority"],
+        client_credential=config["client_secret"],
+    )
+    result = app.acquire_token_for_client(scopes=config["scope"])
+    if "access_token" in result:
+        return result["access_token"]
+    print(f"Token error: {result.get('error_description')}")
+    return None
 
 
 def normalize_value(value):
@@ -172,7 +191,7 @@ def update_github_issue(issue_number, title=None, body=None, state=None):
 
 def get_planner_tasks():
     headers = {
-        "Authorization": f"Bearer {GRAPH_TOKEN}",
+        "Authorization": f"Bearer {get_graph_token()}",
         "Content-Type": "application/json",
     }
     response = requests.get(
@@ -187,7 +206,7 @@ def get_planner_tasks():
 
 def get_planner_task(task_id):
     headers = {
-        "Authorization": f"Bearer {GRAPH_TOKEN}",
+        "Authorization": f"Bearer {get_graph_token()}",
         "Content-Type": "application/json",
     }
     response = requests.get(f"{GRAPH_API}/planner/tasks/{task_id}", headers=headers)
@@ -198,7 +217,7 @@ def get_planner_task(task_id):
 
 def create_planner_task(title):
     headers = {
-        "Authorization": f"Bearer {GRAPH_TOKEN}",
+        "Authorization": f"Bearer {get_graph_token()}",
         "Content-Type": "application/json",
     }
     data = {"planId": PLAN_ID, "bucketId": BUCKET_ID, "title": title}
@@ -211,7 +230,7 @@ def create_planner_task(title):
 
 def update_planner_task(task_id, title=None, percent_complete=None):
     headers = {
-        "Authorization": f"Bearer {GRAPH_TOKEN}",
+        "Authorization": f"Bearer {get_graph_token()}",
         "Content-Type": "application/json",
     }
     data = {}
@@ -227,7 +246,7 @@ def update_planner_task(task_id, title=None, percent_complete=None):
 
 def update_planner_task_details(task_id, description=None):
     headers = {
-        "Authorization": f"Bearer {GRAPH_TOKEN}",
+        "Authorization": f"Bearer {get_graph_token()}",
         "Content-Type": "application/json",
     }
 
