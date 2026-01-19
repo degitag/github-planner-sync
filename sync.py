@@ -153,6 +153,20 @@ def get_github_issue(issue_number):
     return None
 
 
+def get_all_github_issues():
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    response = requests.get(
+        f"{GITHUB_API}/repos/{GITHUB_REPO}/issues?state=all", headers=headers
+    )
+    if response.status_code == 200:
+        return response.json()
+    print(f"GitHub API error: {response.status_code}")
+    return []
+
+
 def create_github_issue(title, body, labels=None):
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
@@ -199,8 +213,7 @@ def get_planner_tasks():
         f"{GRAPH_API}/planner/buckets/{BUCKET_ID}/tasks", headers=headers
     )
     if response.status_code == 200:
-        tasks = response.json().get("value", [])
-        return [t for t in tasks if not t.get("percentComplete", 0) == 100]
+        return response.json().get("value", [])
     print(f"Graph API error: {response.status_code}")
     return []
 
@@ -270,8 +283,8 @@ def update_planner_task_details(task_id, description=None):
 
 
 def sync_github_to_planner():
-    issues = get_github_issues()
-    print(f"Found {len(issues)} open GitHub issues")
+    issues = get_all_github_issues()
+    print(f"Found {len(issues)} total GitHub issues")
 
     for issue in issues:
         github_id = str(issue["id"])
@@ -285,17 +298,22 @@ def sync_github_to_planner():
             else f"**GitHub URL:** {issue_url}"
         )
 
-        percent_complete = get_percent_complete_from_labels(issue.get("labels", []))
+        issue_state = issue.get("state", "open")
+        if issue_state == "closed":
+            percent_complete = 100
+        else:
+            percent_complete = get_percent_complete_from_labels(issue.get("labels", []))
 
         if not planner_id:
-            task = create_planner_task(issue["title"])
-            if task:
-                update_planner_task(task["id"], percent_complete=percent_complete)
-                update_planner_task_details(task["id"], description)
-                save_mapping(github_id, task["id"])
-                print(
-                    f"Created Planner task {task['id']} for GitHub issue #{issue['number']} ({percent_complete}%)"
-                )
+            if issue_state == "open":
+                task = create_planner_task(issue["title"])
+                if task:
+                    update_planner_task(task["id"], percent_complete=percent_complete)
+                    update_planner_task_details(task["id"], description)
+                    save_mapping(github_id, task["id"])
+                    print(
+                        f"Created Planner task {task['id']} for GitHub issue #{issue['number']} ({percent_complete}%)"
+                    )
         else:
             task = get_planner_task(planner_id)
             if task:
@@ -316,33 +334,45 @@ def sync_github_to_planner():
 
 def sync_planner_to_github():
     tasks = get_planner_tasks()
-    print(f"Found {len(tasks)} active Planner tasks")
+    print(f"Found {len(tasks)} total Planner tasks")
 
     for task in tasks:
         planner_id = task["id"]
         github_id = get_mapping(planner_id=planner_id)
 
+        task_complete = task.get("percentComplete", 0) == 100
+
         if not github_id:
-            issue = create_github_issue(task["title"], task.get("description"))
-            if issue:
-                save_mapping(str(issue["id"]), planner_id)
-                print(
-                    f"Created GitHub issue #{issue['number']} for Planner task {planner_id}"
-                )
+            if not task_complete:
+                issue = create_github_issue(task["title"], task.get("description"))
+                if issue:
+                    save_mapping(str(issue["id"]), planner_id)
+                    print(
+                        f"Created GitHub issue #{issue['number']} for Planner task {planner_id}"
+                    )
         else:
             issue = get_github_issue(int(github_id))
             if issue:
-                if normalize_value(issue["title"]) != normalize_value(
+                issue_state = issue.get("state", "open")
+                new_state = "closed" if task_complete else "open"
+                title_changed = normalize_value(issue["title"]) != normalize_value(
                     task["title"]
-                ) or normalize_value(issue.get("body")) != normalize_value(
-                    task.get("description")
-                ):
+                )
+                description_changed = normalize_value(
+                    issue.get("body")
+                ) != normalize_value(task.get("description"))
+                state_changed = new_state != issue_state
+
+                if title_changed or description_changed or state_changed:
                     update_github_issue(
-                        issue["number"], task["title"], task.get("description")
+                        issue["number"],
+                        task["title"],
+                        task.get("description"),
+                        new_state,
                     )
                 update_sync_time(planner_id=planner_id, source="planner")
                 print(
-                    f"Updated GitHub issue #{issue['number']} for Planner task {planner_id}"
+                    f"Updated GitHub issue #{issue['number']} for Planner task {planner_id} (state: {new_state})"
                 )
 
 
