@@ -218,8 +218,16 @@ def sync_github_to_planner():
         github_id = str(issue["id"])
         planner_id = get_mapping(github_id=github_id)
 
+        issue_url = issue["html_url"]
+        body = issue.get("body", "")
+        description = (
+            f"{body}\n\n---\n**GitHub URL:** {issue_url}"
+            if body
+            else f"**GitHub URL:** {issue_url}"
+        )
+
         if not planner_id:
-            task = create_planner_task(issue["title"], issue.get("body"))
+            task = create_planner_task(issue["title"], description)
             if task:
                 save_mapping(github_id, task["id"])
                 print(
@@ -231,9 +239,9 @@ def sync_github_to_planner():
                 if normalize_value(task.get("title")) != normalize_value(
                     issue["title"]
                 ) or normalize_value(task.get("description")) != normalize_value(
-                    issue.get("body")
+                    description
                 ):
-                    update_planner_task(planner_id, issue["title"], issue.get("body"))
+                    update_planner_task(planner_id, issue["title"], description)
                     update_sync_time(github_id=github_id, source="github")
                     print(
                         f"Updated Planner task {planner_id} for GitHub issue #{issue['number']}"
