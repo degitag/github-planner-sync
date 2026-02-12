@@ -384,15 +384,14 @@ def sync_github_to_planner():
             percent_complete = get_percent_complete_from_labels(issue.get("labels", []))
 
         if not planner_id:
-            if issue_state == "open":
-                task = create_planner_task(issue["title"])
-                if task:
-                    update_planner_task(task["id"], percent_complete=percent_complete)
-                    update_planner_task_details(task["id"], description)
-                    save_mapping(github_id, task["id"], issue_state)
-                    print(
-                        f"Created Planner task {task['id']} for GitHub issue #{issue['number']} ({percent_complete}%)"
-                    )
+            task = create_planner_task(issue["title"])
+            if task:
+                update_planner_task(task["id"], percent_complete=percent_complete)
+                update_planner_task_details(task["id"], description)
+                save_mapping(github_id, task["id"], issue_state)
+                print(
+                    f"Created Planner task {task['id']} for GitHub issue #{issue['number']} ({percent_complete}%)"
+                )
         else:
             task = get_planner_task(planner_id)
             previous_issue_state = mapping.get("github_issue_state") if mapping else None
