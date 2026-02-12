@@ -73,7 +73,12 @@ def init_db():
     c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS mappings
                  (github_issue_id TEXT PRIMARY KEY, planner_task_id TEXT,
-                  last_synced_github TIMESTAMP, last_synced_planner TIMESTAMP)""")
+                  last_synced_github TIMESTAMP, last_synced_planner TIMESTAMP,
+                  github_issue_state TEXT)""")
+    c.execute("PRAGMA table_info(mappings)")
+    columns = [row[1] for row in c.fetchall()]
+    if "github_issue_state" not in columns:
+        c.execute("ALTER TABLE mappings ADD COLUMN github_issue_state TEXT")
     conn.commit()
     conn.close()
 
@@ -96,14 +101,43 @@ def get_mapping(github_id=None, planner_id=None):
     return result[0] if result else None
 
 
-def save_mapping(github_id, planner_id):
+def get_mapping_record(github_id=None, planner_id=None):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    if github_id:
+        c.execute(
+            """SELECT github_issue_id, planner_task_id, github_issue_state
+               FROM mappings WHERE github_issue_id = ?""",
+            (github_id,),
+        )
+    elif planner_id:
+        c.execute(
+            """SELECT github_issue_id, planner_task_id, github_issue_state
+               FROM mappings WHERE planner_task_id = ?""",
+            (planner_id,),
+        )
+    else:
+        conn.close()
+        return None
+    result = c.fetchone()
+    conn.close()
+    if not result:
+        return None
+    return {
+        "github_issue_id": result[0],
+        "planner_task_id": result[1],
+        "github_issue_state": result[2],
+    }
+
+
+def save_mapping(github_id, planner_id, github_issue_state=None):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
         """INSERT OR REPLACE INTO mappings
-                 (github_issue_id, planner_task_id, last_synced_github, last_synced_planner)
-                 VALUES (?, ?, ?, ?)""",
-        (github_id, planner_id, datetime.now(), datetime.now()),
+                 (github_issue_id, planner_task_id, last_synced_github, last_synced_planner, github_issue_state)
+                 VALUES (?, ?, ?, ?, ?)""",
+        (github_id, planner_id, datetime.now(), datetime.now(), github_issue_state),
     )
     conn.commit()
     conn.close()
@@ -126,6 +160,17 @@ def update_sync_time(github_id=None, planner_id=None, source=None):
     conn.close()
 
 
+def update_mapping_issue_state(github_id, issue_state):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE mappings SET github_issue_state = ? WHERE github_issue_id = ?",
+        (issue_state, github_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_github_issues():
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
@@ -135,7 +180,7 @@ def get_github_issues():
         f"{GITHUB_API}/repos/{GITHUB_REPO}/issues?state=open", headers=headers
     )
     if response.status_code == 200:
-        return response.json()
+        return [issue for issue in response.json() if "pull_request" not in issue]
     print(f"GitHub API error: {response.status_code}")
     return []
 
@@ -157,24 +202,31 @@ def get_all_github_issues():
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     }
     issues = []
-    url = f"{GITHUB_API}/repos/{GITHUB_REPO}/issues?state=all"
+    page = 1
 
-    while url:
-        response = requests.get(url, headers=headers)
+    while True:
+        response = requests.get(
+            f"{GITHUB_API}/repos/{GITHUB_REPO}/issues",
+            headers=headers,
+            params={"state": "all", "per_page": 100, "page": page},
+        )
         if response.status_code == 200:
-            issues.extend(response.json())
-            if "Link" in response.headers and 'rel="next"' in response.headers["Link"]:
-                link_header = response.headers["Link"]
-                next_link = None
-                for link in link_header.split(","):
-                    if 'rel="next"' in link:
-                        next_link = link.split(";")[0].strip().strip("<>")
-                        break
-                url = next_link
-            else:
-                url = None
+            page_items = [
+                issue for issue in response.json() if "pull_request" not in issue
+            ]
+            issues.extend(page_items)
+            if len(page_items) < 100:
+                break
+            page += 1
+        elif response.status_code == 304:
+            print(
+                f"GitHub API returned 304 on page {page}; returning {len(issues)} fetched issues so far"
+            )
+            break
         else:
             print(f"GitHub API error: {response.status_code}")
             return []
@@ -314,7 +366,8 @@ def sync_github_to_planner():
 
     for issue in issues:
         github_id = str(issue["id"])
-        planner_id = get_mapping(github_id=github_id)
+        mapping = get_mapping_record(github_id=github_id)
+        planner_id = mapping["planner_task_id"] if mapping else None
 
         issue_url = issue["html_url"]
         body = issue.get("body", "")
@@ -336,26 +389,24 @@ def sync_github_to_planner():
                 if task:
                     update_planner_task(task["id"], percent_complete=percent_complete)
                     update_planner_task_details(task["id"], description)
-                    save_mapping(github_id, task["id"])
+                    save_mapping(github_id, task["id"], issue_state)
                     print(
                         f"Created Planner task {task['id']} for GitHub issue #{issue['number']} ({percent_complete}%)"
                     )
         else:
             task = get_planner_task(planner_id)
-            if task:
-                title_changed = normalize_value(task.get("title")) != normalize_value(
-                    issue["title"]
-                )
-                percent_changed = task.get("percentComplete", 0) != percent_complete
-                description_changed = True
+            previous_issue_state = mapping.get("github_issue_state") if mapping else None
+            state_changed = previous_issue_state != issue_state
+            if state_changed:
+                update_mapping_issue_state(github_id, issue_state)
 
-                if title_changed or percent_changed or description_changed:
-                    update_planner_task(planner_id, issue["title"], percent_complete)
-                    update_planner_task_details(planner_id, description)
-                    update_sync_time(github_id=github_id, source="github")
-                    print(
-                        f"Updated Planner task {planner_id} for GitHub issue #{issue['number']} ({percent_complete}%)"
-                    )
+            if task and state_changed:
+                update_planner_task(planner_id, issue["title"], percent_complete)
+                update_planner_task_details(planner_id, description)
+                update_sync_time(github_id=github_id, source="github")
+                print(
+                    f"Updated Planner task {planner_id} for GitHub issue #{issue['number']} (state: {previous_issue_state} -> {issue_state})"
+                )
 
 
 def sync_planner_to_github():
@@ -372,7 +423,8 @@ def sync_planner_to_github():
             if not task_complete:
                 issue = create_github_issue(task["title"], task.get("description"))
                 if issue:
-                    save_mapping(str(issue["id"]), planner_id)
+                    new_state = "closed" if task_complete else "open"
+                    save_mapping(str(issue["id"]), planner_id, new_state)
                     print(
                         f"Created GitHub issue #{issue['number']} for Planner task {planner_id}"
                     )
@@ -390,16 +442,18 @@ def sync_planner_to_github():
                 state_changed = new_state != issue_state
 
                 if title_changed or description_changed or state_changed:
-                    update_github_issue(
+                    updated = update_github_issue(
                         issue["number"],
                         task["title"],
                         task.get("description"),
                         new_state,
                     )
-                update_sync_time(planner_id=planner_id, source="planner")
-                print(
-                    f"Updated GitHub issue #{issue['number']} for Planner task {planner_id} (state: {new_state})"
-                )
+                    if updated:
+                        update_mapping_issue_state(github_id, new_state)
+                        update_sync_time(planner_id=planner_id, source="planner")
+                        print(
+                            f"Updated GitHub issue #{issue['number']} for Planner task {planner_id} (state: {new_state})"
+                        )
 
 
 def main():
